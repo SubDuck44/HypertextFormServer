@@ -16,6 +16,7 @@
             fileset = unions [
               ./meson.build
               ./src
+              ./res
             ];
           };
 

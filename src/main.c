@@ -15,7 +15,14 @@
 
 #define RECV_BUFSIZE 1024
 
+#ifndef NDEBUG
+#define DEBUG(x) x
+#else
+#define DEBUG(x)
+#endif
+
 #define RESPONSE_ERR_405 "HTTP/1.0 405 METHOD NOT ALLOWED"
+#define RESPONSE_ERR_404 "HTTP/1.0 404 PAGE NOT FOUND"
 #define RESPONSE_OK "HTTP/1.0 200 OK DATA IN FLIGHT"
 #define CONTENT_HTML "Content-Type: text/html; charset=utf-8"
 
@@ -55,6 +62,8 @@ Response response_finisher = {
 	.body     = FINISHER,
 	.body_len = sizeof(FINISHER),
 };
+
+Response response_404 = {0};
 
 Response response_405 = {0};
 
@@ -133,7 +142,7 @@ void handleRequest(int socket) {
 	for(;;) {
 
 		ssize_t data_read = recv(socket, buf + len, cap - len - 1, 0);
-		printf("Read %ld bytes of data\n", data_read);
+		DEBUG(printf("Read %ld bytes of data\n", data_read);)
 
 		if(data_read < 0) {
 			close(socket);
@@ -143,7 +152,7 @@ void handleRequest(int socket) {
 		len += data_read;
 
 		if(len >= cap - 1) {
-			buf = realloc(buf, sizeof(char) * (cap << 2));
+			buf = realloc(buf, sizeof(char) * (cap << 1));
 			if(!buf) {
 				close(socket);
 				die("Failed to resize buffer");
@@ -158,7 +167,9 @@ void handleRequest(int socket) {
 
 	printf("Done reading data, total: %ld bytes\n", len);
 
-	printf("Got message from client:\n" BOLD("%.*s") "\n", (int) len, buf);
+	DEBUG(
+		printf("Got message from client:\n" BOLD("%.*s") "\n", (int) len, buf);
+	)
 
 	char* tok = strtok(buf, " ");
 
@@ -170,10 +181,10 @@ void handleRequest(int socket) {
 		printf("Second token: %s\n", tok);
 
 		if(strcmp(tok, "/favicon.ico") == 0) {
-			printf(
-				"Got request for favicon, sending %zu bytes %zu\n",
-				sizeof(FAVICON), sizeof(RESPONSE_OK) - 1
-			);
+			DEBUG(printf(
+					  "Got request for favicon, sending %zu bytes %zu\n",
+					  sizeof(FAVICON), sizeof(RESPONSE_OK) - 1
+			);)
 
 			sendHTTP(socket, &response_favicon);
 
@@ -200,6 +211,8 @@ void handleRequest(int socket) {
 			sendHTTP(socket, &response_finisher);
 
 			printf("Finished, closing connection...\n");
+		} else {
+			sendHTTP(socket, &response_404);
 		}
 	} else {
 		sendHTTP(socket, &response_405);
@@ -233,6 +246,12 @@ int main(void) {
 	responseInit(&response_405);
 	headerAdd(RESPONSE_ERR_405, &response_405);
 	headerFinish(&response_405);
+
+	////////////////////
+
+	responseInit(&response_404);
+	headerAdd(RESPONSE_ERR_404, &response_404);
+	headerFinish(&response_404);
 
 	////////////////////
 
