@@ -189,6 +189,9 @@ void handleRequest(int socket) {
 			sendHTTP(socket, &response_favicon);
 
 			printf("Finished, closing connection...\n");
+
+			goto PageFound;
+
 		} else if(strcmp(tok, "/") == 0) {
 			printf(
 				"Got request for homepage, sending %lu bytes\n",
@@ -198,6 +201,8 @@ void handleRequest(int socket) {
 			sendHTTP(socket, &response_homepage);
 
 			printf("Finished, closing connection...\n");
+
+			goto PageFound;
 		}
 	} else if(strcmp(tok, "POST") == 0) {
 		tok = strtok(NULL, " ");
@@ -211,12 +216,18 @@ void handleRequest(int socket) {
 			sendHTTP(socket, &response_finisher);
 
 			printf("Finished, closing connection...\n");
-		} else {
-			sendHTTP(socket, &response_404);
+
+			goto PageFound;
 		}
 	} else {
 		sendHTTP(socket, &response_405);
+
+		goto PageFound;
 	}
+
+	sendHTTP(socket, &response_404);
+
+PageFound:
 
 	memset(buf, 0, len * sizeof(char));
 	len = 0;
