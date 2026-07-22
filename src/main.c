@@ -154,7 +154,7 @@ void handleRequest(int socket) {
 			break;
 		}
 	}
-	buf[len - 1] = '\0';
+	buf[len] = '\0';
 
 	printf("Done reading data, total: %ld bytes\n", len);
 
