@@ -43,6 +43,7 @@
           packages = with pkgs; [
             clang-tools
             just
+            valgrind
           ];
         };
       });

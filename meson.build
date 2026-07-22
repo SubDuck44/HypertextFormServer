@@ -1,5 +1,5 @@
 project(
-	'example',
+	'form-server',
 	'c',
 	default_options: {
 		'c_std': 'c23',
@@ -9,7 +9,7 @@ project(
 )
 
 executable(
-	'example',
+	'form-server',
 	'src/main.c',
 	c_args: [
 		'-DVERSION="@0@"'.format(meson.project_version()),

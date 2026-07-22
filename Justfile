@@ -1,5 +1,5 @@
 run: build
-	./build/example
+	./build/form-server
 
 build:
 	if [ ! -d build ] || [ ! -f build/meson-private/coredata.dat ]; then just _wipe; fi
