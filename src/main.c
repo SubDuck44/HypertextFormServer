@@ -1,19 +1,27 @@
 #define _POSIX_C_SOURCE 199309L
+#define _GNU_SOURCE
 
 #include <arpa/inet.h>
+#include <ctype.h>
 #include <err.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
 
+#include "config.h"
+
 #define die(...) err(1, __VA_ARGS__)
-#define PORTNUM 8080
+#define log(fmt, ...)                                                          \
+	fprintf(                                                                   \
+		stderr, "%s:%d: " fmt "\n", __FILE__,                                  \
+		__LINE__ __VA_OPT__(, ) __VA_ARGS__                                    \
+	)
+#define BRK __asm__("int3")
 
 #define BOLD(str) "[1m" str "[m"
-
-#define RECV_BUFSIZE 1024
 
 #ifndef NDEBUG
 #define DEBUG(x) x
@@ -25,6 +33,10 @@
 #define RESPONSE_ERR_404 "HTTP/1.0 404 PAGE NOT FOUND"
 #define RESPONSE_OK "HTTP/1.0 200 OK DATA IN FLIGHT"
 #define CONTENT_HTML "Content-Type: text/html; charset=utf-8"
+
+const uint8_t CONGRATS[] = {
+#embed "../res/congrats.webp"
+};
 
 const uint8_t FAVICON[] = {
 #embed "../res/favicon.ico"
@@ -38,6 +50,34 @@ const uint8_t FINISHER[] = {
 #embed "finished.html"
 };
 
+////////////////////////////////////////////////////////////////////////////////
+
+#define METHODS                                                                \
+	X(GET)                                                                     \
+	X(POST)
+
+typedef enum {
+	METH_INVALID,
+#define X(x) METH_##x,
+	METHODS
+#undef X
+} Method;
+
+const char* methodShow(Method meth) {
+	switch(meth) {
+#define X(x)                                                                   \
+	case METH_##x:                                                             \
+		return #x;
+
+		METHODS
+	default:
+		return "INVALID";
+	}
+#undef X
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
 typedef struct {
 	char*          str;
 	size_t         cap;
@@ -46,7 +86,10 @@ typedef struct {
 	size_t         body_len;
 } Response;
 
-////////////////////////////////////////////////////////////////////////////////
+Response response_congrats = {
+	.body     = CONGRATS,
+	.body_len = sizeof(CONGRATS),
+};
 
 Response response_favicon = {
 	.body     = FAVICON,
@@ -107,7 +150,7 @@ void headerFinish(Response* response) {
 }
 
 void sendAll(int socket, const uint8_t* data, size_t len) {
-	puts("Sending data...");
+	log("Sending data...");
 
 	ssize_t data_sent = 0;
 	while(data_sent < (ssize_t) len) {
@@ -119,121 +162,174 @@ void sendAll(int socket, const uint8_t* data, size_t len) {
 		}
 	}
 
-	puts("Done sending data!");
+	log("Done sending data!");
 }
 
-void sendHTTP(int socket, Response* response) {
-	sendAll(socket, (uint8_t*) response->str, response->len);
-	if(response->body) sendAll(socket, response->body, response->body_len);
+void sendHTTP(int socket, Response response) {
+	sendAll(socket, (uint8_t*) response.str, response.len);
+	if(response.body) sendAll(socket, response.body, response.body_len);
+}
+
+char* trimL(char* str) {
+	while(isspace(str[0])) {
+		str++;
+	}
+
+	return str;
+}
+
+char* trimR(char* str) {
+	size_t len = strlen(str);
+
+	while(len > 0 && isspace(str[len - 1])) {
+		len--;
+	}
+
+	str[len] = 0;
+
+	return str;
+}
+
+char* trim(char* str) {
+	return trimL(trimR(str));
 }
 
 void handleRequest(int socket) {
-	static char*   buf = NULL;
-	static ssize_t len = 0;
-	static ssize_t cap = 0;
+	FILE* f = fdopen(socket, "rb");
+	if(!f) die("Failed to upcast client socket");
 
-	// init the buffer for first run
-	if(!buf) {
-		buf = calloc(RECV_BUFSIZE, sizeof(char));
-		if(!buf) die("Failed to allocate memory");
-		cap = RECV_BUFSIZE;
-	}
+	static char*  buf = NULL;
+	static size_t cap = 0;
+
+	Method meth           = METH_INVALID;
+	char   path[2048]     = {0};
+	size_t content_length = 0;
+	bool   headers_done   = false;
 
 	for(;;) {
+		ssize_t len = getline((char**) &buf, &cap, f);
+		if(len < 0) die("Could not get line from socket");
 
-		ssize_t data_read = recv(socket, buf + len, cap - len - 1, 0);
-		DEBUG(printf("Read %ld bytes of data\n", data_read);)
+		trimR(buf);
 
-		if(data_read < 0) {
-			close(socket);
-			die("Failed to receive data from user");
-		}
+		if(strlen(buf) == 0) break;
 
-		len += data_read;
+		if(headers_done) continue;
 
-		if(len >= cap - 1) {
-			buf = realloc(buf, sizeof(char) * (cap << 1));
-			if(!buf) {
-				close(socket);
-				die("Failed to resize buffer");
+		if(meth == METH_INVALID) {
+			char* tok = strtok(buf, " ");
+			if(!tok) die("Could not get method token");
+
+#define X(x)                                                                   \
+	else if(strcmp(tok, #x) == 0) {                                            \
+		meth = METH_##x;                                                       \
+	}
+			if(0) {
+			} else if(strcmp(tok, "GET") == 0) {
+				meth = METH_GET;
+			} else if(strcmp(tok, "POST") == 0) {
+				meth = METH_POST;
+			} else {
+				die("Failed to parse signature line");
 			}
 
-			cap <<= 1;
+			char* path_tok = strtok(NULL, " ");
+			if(!path_tok) die("Could not get path token");
+
+			strncpy(path, path_tok, sizeof(path));
 		} else {
-			break;
+			char* key = strtok(buf, ":");
+			if(!key) die("Could not get header key");
+
+			key = trim(key);
+
+			if(strcasecmp(key, "content-length") == 0) {
+				char* val = strtok(NULL, "\n");
+				if(!val) die("Could not find value of content-length header");
+
+				char* val_end  = NULL;
+				content_length = strtoul(val, &val_end, 10);
+				if(*val_end != 0)
+					die("Could not convert content-length to int");
+
+				headers_done = true;
+			}
 		}
 	}
-	buf[len] = '\0';
 
-	printf("Done reading data, total: %ld bytes\n", len);
+	log(
+		"Got request: %s %s %zu ", //
+		methodShow(meth),          //
+		path,                      //
+		content_length             //
+	);
 
-	DEBUG(
-		printf("Got message from client:\n" BOLD("%.*s") "\n", (int) len, buf);
-	)
+	bool ok = false;
 
-	char* tok = strtok(buf, " ");
+	switch(meth) {
+	case METH_GET:
+		if(strcasecmp(path, "/favicon.ico") == 0) {
+			log("Got favicon request, sending %zu bytes", sizeof(FAVICON));
 
-	printf("First token: (%s)\n", tok);
+			sendHTTP(socket, response_favicon);
+			ok = true;
+		} else if(strcasecmp(path, "/congrats.webp") == 0) {
+			log("Got congrats request, sending %zu bytes", sizeof(CONGRATS));
 
-	if(strcmp(tok, "GET") == 0) {
-		tok = strtok(NULL, " ");
+			sendHTTP(socket, response_congrats);
+			ok = true;
+		} else if(strcasecmp(path, "/") == 0) {
+			log("Got mainpage request, sending %zu bytes", sizeof(HOMEPAGE));
 
-		printf("Second token: %s\n", tok);
+			sendHTTP(socket, response_homepage);
+			ok = true;
+		} else if(strcasecmp(path, "/quit") == 0) {
+			log("Quit via request");
 
-		if(strcmp(tok, "/favicon.ico") == 0) {
-			DEBUG(printf(
-					  "Got request for favicon, sending %zu bytes %zu\n",
-					  sizeof(FAVICON), sizeof(RESPONSE_OK) - 1
-			);)
-
-			sendHTTP(socket, &response_favicon);
-
-			printf("Finished, closing connection...\n");
-
-			goto PageFound;
-
-		} else if(strcmp(tok, "/") == 0) {
-			printf(
-				"Got request for homepage, sending %lu bytes\n",
-				sizeof(HOMEPAGE)
-			);
-
-			sendHTTP(socket, &response_homepage);
-
-			printf("Finished, closing connection...\n");
-
-			goto PageFound;
+			exit(0);
 		}
-	} else if(strcmp(tok, "POST") == 0) {
-		tok = strtok(NULL, " ");
 
-		if(strcmp(tok, "/finished") == 0) {
-			printf(
-				"Got request for finisher page, sending %lu bytes\n",
-				sizeof(FINISHER)
-			);
+		break;
 
-			sendHTTP(socket, &response_finisher);
+	case METH_POST:
+		if(strcasecmp(path, "/finished") == 0) {
+			log("Client finished form");
 
-			printf("Finished, closing connection...\n");
+			const char* res_path = "results.txt";
+			FILE*       res_file = fopen(res_path, "a");
+			if(!res_file) die("Could not open %s", res_path);
 
-			goto PageFound;
+			if(fread(buf, 1, content_length, f) < content_length)
+				die("Could not read %zu bytes from socket", content_length);
+
+			if(fwrite(buf, 1, content_length, res_file) < content_length)
+				die("Could not write %zu bytes to %s", content_length,
+				    res_path);
+
+			fclose(res_file);
+
+			sendHTTP(socket, response_finisher);
+
+			ok = true;
 		}
-	} else {
-		sendHTTP(socket, &response_405);
+		break;
 
-		goto PageFound;
+	default:
+		die("Unreachable");
 	}
 
-	sendHTTP(socket, &response_404);
+	if(!ok) { sendHTTP(socket, response_404); }
 
-PageFound:
-
-	memset(buf, 0, len * sizeof(char));
-	len = 0;
+	log("Finished, closing connection...");
 }
 
 int main(void) {
+	responseInit(&response_congrats);
+	headerAdd(RESPONSE_OK, &response_congrats);
+	headerFinish(&response_congrats);
+
+	////////////////////
+
 	responseInit(&response_favicon);
 	headerAdd(RESPONSE_OK, &response_favicon);
 	headerFinish(&response_favicon);
@@ -292,12 +388,7 @@ int main(void) {
 
 	if(listen(server_sock, 1) < 0) die("Failed to listen on socket");
 
-	printf(
-		BOLD(
-			"====================\nServer open!\n"
-		) "Listening on port %d...\n",
-		PORTNUM
-	);
+	log(BOLD("Listening on port %d..."), PORTNUM);
 
 	for(;;) {
 		if((client_sock = accept(server_sock, (struct sockaddr*) NULL, NULL)) <
@@ -309,9 +400,6 @@ int main(void) {
 
 		close(client_sock);
 	}
-
-	close(server_sock);
-	printf(BOLD("Server closed!\n====================\n"));
 
 	return 0;
 }
