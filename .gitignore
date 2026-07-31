@@ -1,4 +1,4 @@
 /.cache
 /.direnv
 /.env
-/result
+result*
