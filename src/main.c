@@ -202,7 +202,7 @@ void handleRequest(int socket) {
 	static size_t cap = 0;
 
 	Method meth           = METH_INVALID;
-	char   path[2048]     = {0};
+	char   path[2048 + 1] = {0};
 	size_t content_length = 0;
 	bool   headers_done   = false;
 
@@ -236,7 +236,7 @@ void handleRequest(int socket) {
 			char* path_tok = strtok(NULL, " ");
 			if(!path_tok) die("Could not get path token");
 
-			strncpy(path, path_tok, sizeof(path));
+			strncpy(path, path_tok, sizeof(path) - 1);
 		} else {
 			char* key = strtok(buf, ":");
 			if(!key) die("Could not get header key");
