@@ -3,7 +3,7 @@ project(
     'c',
     default_options: {
         'c_std': 'c23',
-        'buildtype': 'debugoptimized',
+        'buildtype': 'debug',
         'warning_level': '3',
         'b_ndebug': 'if-release',
     },
